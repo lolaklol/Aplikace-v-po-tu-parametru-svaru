@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8" />
+  <title>Oscilace + výpočty + segmenty + import/export</title>
+  <style>
+    body { font-family: sans-serif; padding: 1em; max-width: 1100px; margin: auto; }
+    canvas { border: 1px solid #000; margin-top: 20px; background: #fff; width: 100%; }
+    .input-row { display: flex; gap: 8px; margin-bottom: 6px; align-items: center; flex-wrap: wrap; }
+    .input-row input { width: 60px; padding: 4px; }
+    .input-row label { width: auto; font-weight: bold; }
+    .block { border: 1px solid #ccc; padding: 8px; margin-top: 16px; background: #f9f9f9; }
+  </style>
+</head>
+<body>
+  <h2>Oscilační smyčka + výpočty + segmenty + import/export</h2>
+
+  <div id="inputs"></div>
+
+  <div class="input-row" style="margin-top: 10px;">
+    <label>Opakování smyčky:</label>
+    <input type="number" id="repeat" value="3" min="1" max="500">
+    <button onclick="startSingle()">Spustit animaci</button>
+    <button onclick="addSegment()">Přidat segment</button>
+    <button onclick="startFull()">Vykreslit celý svar</button>
+    <button onclick="exportSegments()">Exportovat segmenty</button>
+    <input type="file" id="importFile" accept=".json" onchange="importSegments(this)" />
+  </div>
+
+  <canvas id="canvas" width="1200" height="400"></canvas>
+
+  <h3>Zadání geometrie svaru:</h3>
+  <div class="input-row">
+    <label>a (mm):</label><input id="val_a" type="number" value="7">
+    <label>b (mm):</label><input id="val_b" type="number" value="2.5">
+    <label>v (mm):</label><input id="val_v" type="number" value="5">
+    <label>⌀ trubky D (mm):</label><input id="val_D" type="number" value="114">
+    <label>⌀ drátu d (mm):</label><input id="val_d" type="number" value="1.2">
+  </div>
+
+  <div id="results" style="margin-top: 20px; font-weight: bold;"></div>
+
+  <div class="block">
+    <h3>Uložené segmenty</h3>
+    <div id="segmentList"></div>
+  </div>
+
+  <script>
+    const scale = 40;
+    const centerY = 200;
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const segmentSets = [];
+
+    const defaultSegments = [
+      { name: "náběh", color: "red", a1: 0, a2: 4.5, dx: 0.5, t: 500 },
+      { name: "výdrž", color: "magenta", a1: 4.5, a2: 4.5, dx: 0.2, t: 500 },
+      { name: "doběh", color: "lime", a1: 4.5, a2: 0, dx: 0.5, t: 500 },
+      { name: "náběh2", color: "blue", a1: 0, a2: -4.5, dx: 0.5, t: 500 },
+      { name: "výdrž2", color: "orange", a1: -4.5, a2: -4.5, dx: 0.2, t: 500 },
+      { name: "doběh2", color: "cyan", a1: -4.5, a2: 0, dx: 0.5, t: 500 }
+    ];
+
+    function createInputs() {
+      const container = document.getElementById("inputs");
+      container.innerHTML = "";
+      defaultSegments.forEach((seg, i) => {
+        const row = document.createElement("div");
+        row.className = "input-row";
+        row.innerHTML = `
+          <label style="color:${seg.color}">${seg.name}</label>
+          A1: <input type="number" id="a1_${i}" value="${seg.a1}">
+          A2: <input type="number" id="a2_${i}" value="${seg.a2}">
+          ΔX: <input type="number" id="dx_${i}" value="${seg.dx}">
+          t(ms): <input type="number" id="t_${i}" value="${seg.t}">
+        `;
+        container.appendChild(row);
+      });
+
+      for (let i = 1; i < 6; i++) {
+        document.getElementById(`a1_${i}`).readOnly = true;
+      }
+      document.getElementById("a2_0").addEventListener("input", e => { document.getElementById("a1_1").value = e.target.value; });
+      document.getElementById("a2_1").addEventListener("input", e => { document.getElementById("a1_2").value = e.target.value; });
+      document.getElementById("a2_2").addEventListener("input", e => { document.getElementById("a1_3").value = e.target.value; });
+      document.getElementById("a2_3").addEventListener("input", e => { document.getElementById("a1_4").value = e.target.value; });
+      document.getElementById("a2_4").addEventListener("input", e => { document.getElementById("a1_5").value = e.target.value; });
+      document.getElementById("a2_5").addEventListener("input", e => { document.getElementById("a1_0").value = e.target.value; });
+    }
+
+    function getSegments() {
+      return defaultSegments.map((seg, i) => ({
+        name: seg.name,
+        color: seg.color,
+        a1: parseFloat(document.getElementById(`a1_${i}`).value),
+        a2: parseFloat(document.getElementById(`a2_${i}`).value),
+        dx: parseFloat(document.getElementById(`dx_${i}`).value),
+        t: parseInt(document.getElementById(`t_${i}`).value)
+      }));
+    }
+
+    function addSegment() {
+      const repeat = parseInt(document.getElementById("repeat").value);
+      const segments = getSegments();
+      segmentSets.push({ repeat, segments });
+      renderSegmentList();
+    }
+
+    function renderSegmentList() {
+      const list = document.getElementById("segmentList");
+      list.innerHTML = "";
+      segmentSets.forEach((s, i) => {
+        const div = document.createElement("div");
+        div.innerHTML = `<b>Segment ${i + 1}:</b> ${s.repeat}× smyčka`;
+        list.appendChild(div);
+      });
+    }
+
+    function exportSegments() {
+      if (segmentSets.length === 0) {
+        alert("Není co exportovat – žádné segmenty nebyly přidány.");
+        return;
+      }
+      const json = JSON.stringify(segmentSets, null, 2);
+      const blob = new Blob([json], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "segmenty.json";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    }
+
+    function importSegments(input) {
+      const file = input.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function (e) {
+        try {
+          const loaded = JSON.parse(e.target.result);
+          if (Array.isArray(loaded)) {
+            segmentSets.length = 0;
+            loaded.forEach(seg => segmentSets.push(seg));
+            renderSegmentList();
+            alert("Segmenty byly úspěšně načteny.");
+          } else {
+            alert("Neplatný formát souboru.");
+          }
+        } catch (err) {
+          alert("Chyba při načítání souboru: " + err.message);
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    async function startSingle() {
+      const repeat = parseInt(document.getElementById("repeat").value);
+      await animate([{ repeat, segments: getSegments() }]);
+    }
+
+    async function startFull() {
+      await animate(segmentSets);
+    }
+
+    async function animate(data) {
+      drawBackground();
+      let x = scale;
+      let totalX = 0, totalT = 0;
+      const traj = [];
+
+      for (const entry of data) {
+        for (let r = 0; r < entry.repeat; r++) {
+          for (const seg of entry.segments) {
+            const x1 = x;
+            const y1 = centerY - seg.a1 * scale;
+            const x2 = x + seg.dx * scale;
+            const y2 = centerY - seg.a2 * scale;
+            traj.push({ x1, y1, x2, y2, t: seg.t, color: seg.color });
+            x = x2;
+            totalX += seg.dx;
+            totalT += seg.t;
+          }
+        }
+      }
+
+      const a = parseFloat(document.getElementById("val_a").value);
+      const b = parseFloat(document.getElementById("val_b").value);
+      const v = parseFloat(document.getElementById("val_v").value);
+      const D = parseFloat(document.getElementById("val_D").value);
+      const d = parseFloat(document.getElementById("val_d").value);
+
+      const S = ((a + b) / 2) * v;
+      const L = Math.PI * D;
+      const V = S * L;
+      const vx = totalT > 0 ? (totalX / totalT) * 1000 : 0;
+      const Sd = Math.PI * Math.pow(d / 2, 2);
+      const weldTime = vx > 0 ? L / vx : 0;
+      const vd = weldTime > 0 ? V / (weldTime * Sd) : 0;
+      const vd_mpm = vd / 1000 * 60;
+
+      document.getElementById("results").innerHTML = `
+        <div>Celková dráha X: ${totalX.toFixed(2)} mm</div>
+        <div>Celkový čas: ${totalT} ms</div>
+        <div>Průměrná rychlost: ${vx.toFixed(2)} mm/s</div>
+        <hr>
+        <div>Plocha svaru: ${S.toFixed(2)} mm²</div>
+        <div>Objem svaru: ${V.toFixed(0)} mm³</div>
+        <div>Délka svaru (obvod trubky): ${L.toFixed(1)} mm</div>
+        <div>Počet smyček: ${(L / (totalX / (totalT / 1000))).toFixed(1)}</div>
+        <div>Rychlost podávání drátu: ${vd_mpm.toFixed(2)} m/min</div>
+        <div>Objem drátu za minutu: ${(vd * Sd * 60).toFixed(0)} mm³/min</div>
+        <div>Odhadovaný čas svařování: ${weldTime.toFixed(1)} s</div>
+      `;
+
+      for (const seg of traj) {
+        const steps = Math.max(2, Math.floor(seg.t / 10));
+        for (let s = 0; s <= steps; s++) {
+          const k = s / steps;
+          const x = seg.x1 + (seg.x2 - seg.x1) * k;
+          const y = seg.y1 + (seg.y2 - seg.y1) * k;
+          drawBackground();
+          for (const line of traj) {
+            ctx.beginPath();
+            ctx.moveTo(line.x1, line.y1);
+            ctx.lineTo(line.x2, line.y2);
+            ctx.strokeStyle = line.color;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+          }
+          ctx.beginPath();
+          ctx.arc(x, y, 5, 0, 2 * Math.PI);
+          ctx.fillStyle = "red";
+          ctx.fill();
+          await new Promise(resolve => setTimeout(resolve, seg.t / steps));
+        }
+      }
+    }
+
+    function drawBackground() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.strokeStyle = "#eee";
+      for (let x = 0; x <= canvas.width; x += scale) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+      }
+      for (let y = 0; y <= canvas.height; y += scale) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+      }
+      ctx.strokeStyle = "#000";
+      ctx.beginPath();
+      ctx.moveTo(0, centerY); ctx.lineTo(canvas.width, centerY);
+      ctx.moveTo(scale, 0); ctx.lineTo(scale, canvas.height);
+      ctx.stroke();
+    }
+
+    createInputs();
+  </script>
+</body>
+</html>
